@@ -9,16 +9,24 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 import aiohttp
 import uvicorn
 
-# Настройки
 DATABASE_URL = os.getenv("DATABASE_URL")
 API_TOKEN = os.getenv("TELEGRAM_TOKEN")
 IFTTT_KEY = os.getenv("IFTTT_KEY")
-CHAT_ID = os.getenv("CHAT_ID") # Ваш новый Chat ID
+CHAT_ID = os.getenv("CHAT_ID")
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# --- Функции БД ---
+# Переменная для хранения ID сообщения с меню, чтобы обновлять в нем статус
+MENU_MSG_ID = None
+
+# Клавиатура вынесена отдельно
+main_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="▶️ Запустить Majestic", callback_data="btn_start")],
+    [InlineKeyboardButton(text="⏹ Выключить ПК", callback_data="btn_stop")],
+    [InlineKeyboardButton(text="⚙️ Действие", callback_data="btn_action")]
+])
+
 async def execute_query(query, *args):
     conn = await asyncpg.connect(DATABASE_URL)
     result = await conn.fetch(query, *args)
@@ -31,54 +39,31 @@ async def lifespan(app: FastAPI):
     count = await execute_query("SELECT COUNT(*) FROM commands")
     if count[0][0] == 0:
         await execute_query("INSERT INTO commands (cmd) VALUES ('none')")
-    
     task = asyncio.create_task(dp.start_polling(bot))
     yield
     task.cancel()
 
 app = FastAPI(lifespan=lifespan)
 
-# --- IFTTT (Управление розеткой) ---
 async def trigger_ifttt(event_name):
     url = f"https://maker.ifttt.com/trigger/{event_name}/with/key/{IFTTT_KEY}"
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
             return response.status == 200
 
-# --- Команды Telegram ---
-@dp.message(Command("on"))
-async def cmd_on(message):
-    await message.answer("⚡ Передаю сигнал на включение розетки...")
-    success = await trigger_ifttt("pc_on")
-    if success:
-        await message.answer("✅ Розетка включена! Ждем запуска агента...")
-    else:
-        await message.answer("❌ Ошибка связи с IFTTT.")
-
-@dp.message(Command("off"))
-async def cmd_off(message):
-    await execute_query("UPDATE commands SET cmd = 'shutdown' WHERE id = 1")
-    await message.answer("🖥 Компьютер выключается. Жду 60 секунд...")
-    await asyncio.sleep(60)
-    
-    success = await trigger_ifttt("pc_off")
-    if success:
-        await message.answer("🔌 Питание успешно обесточено.")
-    else:
-        await message.answer("❌ Ошибка отключения розетки в IFTTT.")
-
-# --- Обработка нажатия Inine-кнопок ---
+# --- Обработка кнопок ---
 @dp.callback_query(F.data.in_({"btn_start", "btn_stop", "btn_action"}))
 async def process_buttons(callback: CallbackQuery):
-    # Пока кнопки пустые, бот просто будет присылать всплывающее уведомление
     if callback.data == "btn_start":
-        await callback.answer("▶️ Команда СТАРТ в разработке!", show_alert=True)
+        await execute_query("UPDATE commands SET cmd = 'start_majestic' WHERE id = 1")
+        await callback.answer("Команда на запуск отправлена!")
     elif callback.data == "btn_stop":
-        await callback.answer("⏹ Команда СТОП в разработке!", show_alert=True)
+        await execute_query("UPDATE commands SET cmd = 'shutdown' WHERE id = 1")
+        await callback.answer("Команда выключения отправлена!")
     elif callback.data == "btn_action":
         await callback.answer("⚙️ Действие в разработке!", show_alert=True)
 
-# --- API эндпоинты для Агента на ПК ---
+# --- API эндпоинты ---
 @app.get("/get_task")
 async def get_task():
     result = await execute_query("SELECT cmd FROM commands WHERE id = 1")
@@ -88,22 +73,35 @@ async def get_task():
 
 @app.get("/agent_started")
 async def agent_started():
-    """Этот адрес дергает ПК при включении, чтобы бот прислал меню"""
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="▶️ Старт", callback_data="btn_start")],
-        [InlineKeyboardButton(text="⏹ Стоп", callback_data="btn_stop")],
-        [InlineKeyboardButton(text="⚙️ Действие", callback_data="btn_action")]
-    ])
-    
+    global MENU_MSG_ID
+    await execute_query("UPDATE commands SET cmd = 'none' WHERE id = 1")
     try:
-        await bot.send_message(
+        msg = await bot.send_message(
             chat_id=CHAT_ID, 
-            text="🖥 Агент успешно запущен и готов к работе!", 
-            reply_markup=keyboard
+            text="🖥 Агент запущен.\n🟢 Статус: Ожидание команд.", 
+            reply_markup=main_keyboard
         )
+        MENU_MSG_ID = msg.message_id # Запоминаем ID сообщения
         return {"status": "ok"}
     except Exception as e:
         return {"status": "error", "details": str(e)}
+
+@app.get("/update_status")
+async def update_status(text: str):
+    """Эндпоинт для обновления текста в меню"""
+    global MENU_MSG_ID
+    if MENU_MSG_ID:
+        try:
+            await bot.edit_message_text(
+                chat_id=CHAT_ID,
+                message_id=MENU_MSG_ID,
+                text=f"🖥 Агент запущен.\n🔄 Статус: {text}",
+                reply_markup=main_keyboard
+            )
+            return {"status": "ok"}
+        except Exception:
+            pass
+    return {"status": "ignored"}
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
