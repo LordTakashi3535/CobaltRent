@@ -62,9 +62,6 @@ async def cmd_off(message):
     await execute_query("UPDATE commands SET cmd = 'shutdown' WHERE id = 1")
     await message.answer("🖥 Команда выключения Windows отправлена...")
     
-    # Ждем 60 секунд, пока компьютер выключается
-    await asyncio.sleep(60)
-    
     try:
         device = await get_tapo_device() # Ждем получения устройства
         await device.off()               # Ждем выключения
