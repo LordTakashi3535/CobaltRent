@@ -48,32 +48,27 @@ app = FastAPI(lifespan=lifespan)
 
 @dp.message(Command("on"))
 async def cmd_on(message):
-    await message.answer("⚡ Подаю питание на ПК через облако...")
     try:
-        # Прямое облачное управление
+        # Инициализируем клиент
         client = ApiClient(TAPO_EMAIL, TAPO_PASSWORD)
-        device = client.p100(TAPO_IP)
-        await device.turnOn()
-        await message.answer("✅ Розетка включена! ПК запускается.")
+        # ВАЖНО: await при получении устройства
+        device = await client.p110(TAPO_IP) 
+        # Используем метод on() (без turn_)
+        await device.on()
+        await message.answer("✅ Розетка включена!")
     except Exception as e:
-        await message.answer(f"❌ Ошибка включения: {e}")
+        await message.answer(f"❌ Ошибка: {e}")
 
 @dp.message(Command("off"))
 async def cmd_off(message):
-    # 1. Даем команду агенту на ПК корректно выключить Windows
-    await execute_query("UPDATE commands SET cmd = 'shutdown' WHERE id = 1")
-    await message.answer("🖥 Команда выключения Windows отправлена. Жду 60 секунд...")
+    # ... логика выключения ПК ...
+    await asyncio.sleep(60)
     
-    # 3. Физически выключаем розетку через облако
     try:
         client = ApiClient(TAPO_EMAIL, TAPO_PASSWORD)
-        
-        # В некоторых версиях нужно дождаться инициализации устройства:
-        device = await client.p100(TAPO_IP) 
-        
-        # И только потом вызывать команду:
+        device = await client.p110(TAPO_IP)
+        # Используем метод off()
         await device.off()
-        
         await message.answer("🔌 Питание обесточено.")
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}")
