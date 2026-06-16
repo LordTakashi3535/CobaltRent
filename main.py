@@ -67,19 +67,16 @@ async def cmd_off(message):
     # 3. Физически выключаем розетку через облако
     try:
         client = ApiClient(TAPO_EMAIL, TAPO_PASSWORD)
-        device = client.p100(TAPO_IP)
         
-        # Диагностика: выводим все методы объекта, чтобы увидеть правильное имя
-        methods = [method for method in dir(device) if callable(getattr(device, method)) and not method.startswith("_")]
-        print(f"Доступные методы: {methods}")
+        # В некоторых версиях нужно дождаться инициализации устройства:
+        device = await client.p100(TAPO_IP) 
         
-        # Если вы увидите в списке что-то вроде 'on', 'off', 'turn_on' или 'set_power_state',
-        # подставьте его ниже:
-        await device.off() # Попробуйте этот вариант первым
+        # И только потом вызывать команду:
+        await device.off()
         
         await message.answer("🔌 Питание обесточено.")
     except Exception as e:
-        await message.answer(f"❌ Ошибка: {e}\nМетоды объекта: {methods}")
+        await message.answer(f"❌ Ошибка: {e}")
 
 @dp.message(Command("sleep"))
 async def cmd_sleep(message):
