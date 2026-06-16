@@ -1,31 +1,38 @@
 import asyncio
-import os
-from aiogram import Bot, Dispatcher, types
+import os # Импортируем для работы с переменными окружения
+from fastapi import FastAPI
+from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from dotenv import load_dotenv # Установите через pip install python-dotenv
+import uvicorn
 
-# Загружаем переменные из .env файла (локально)
-# На хостинге (Railway) переменные подхватятся автоматически из системы
-load_dotenv()
+# Берем токен из переменной окружения, которую вы зададите в Railway
+API_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# Получаем данные из переменных окружения
-API_TOKEN = os.getenv('TELEGRAM_TOKEN')
-MY_USER_ID = int(os.getenv('USER_ID', 0)) # Превращаем в число, по умолчанию 0
-
+app = FastAPI()
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-@dp.message(Command("sleep"))
-async def cmd_sleep(message: types.Message):
-    if message.from_user.id == MY_USER_ID:
-        # Здесь логика записи команды в базу или файл, 
-        # который будет проверять ваш домашний компьютер
-        await message.answer("Команда на сон отправлена на ваш компьютер.")
-    else:
-        await message.answer("У вас нет прав доступа.")
+tasks = {"cmd": None}
 
-async def main():
+@dp.message(Command("sleep"))
+async def cmd_sleep(message):
+    tasks["cmd"] = "sleep"
+    await message.answer("Команда на сон сохранена для клиента!")
+
+@app.get("/get_task")
+async def get_task():
+    cmd = tasks.get("cmd")
+    tasks["cmd"] = None
+    return {"command": cmd}
+
+async def run_bot():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Запускаем бота
+    loop = asyncio.get_event_loop()
+    loop.create_task(run_bot())
+    
+    # Запускаем сервер на порту, который требует Railway
+    port = int(os.getenv("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
