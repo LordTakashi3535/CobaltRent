@@ -1,4 +1,6 @@
 fastapi
 uvicorn
 aiogram
+asyncpg
+databases
 requests
