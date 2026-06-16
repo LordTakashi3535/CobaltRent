@@ -5,13 +5,12 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from tapo import ApiClient  # Добавлено
+from tapo import ApiClient  # Библиотека для управления через облако
 import uvicorn
 
-# Настройки
+# --- Настройки из переменных окружения ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 API_TOKEN = os.getenv("TELEGRAM_TOKEN")
-# Настройки Tapo из переменных окружения
 TAPO_EMAIL = os.getenv("TAPO_EMAIL")
 TAPO_PASSWORD = os.getenv("TAPO_PASSWORD")
 TAPO_IP = os.getenv("TAPO_IP", "192.168.1.9")
@@ -19,20 +18,17 @@ TAPO_IP = os.getenv("TAPO_IP", "192.168.1.9")
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# Инициализация Tapo клиента
-tapo_client = ApiClient(TAPO_EMAIL, TAPO_PASSWORD)
-device = tapo_client.p100(TAPO_IP)
-
-# Функция БД
+# --- Функции БД ---
 async def execute_query(query, *args):
     conn = await asyncpg.connect(DATABASE_URL)
     result = await conn.fetch(query, *args)
     await conn.close()
     return result
 
+# --- Жизненный цикл FastAPI ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup: создание таблицы
     await execute_query("""
         CREATE TABLE IF NOT EXISTS commands (id SERIAL PRIMARY KEY, cmd TEXT)
     """)
@@ -40,47 +36,58 @@ async def lifespan(app: FastAPI):
     if count[0][0] == 0:
         await execute_query("INSERT INTO commands (cmd) VALUES ('none')")
     
+    # Запуск бота в фоновом режиме
     task = asyncio.create_task(dp.start_polling(bot))
     yield
+    # Shutdown
     task.cancel()
 
 app = FastAPI(lifespan=lifespan)
 
-# --- Команды бота ---
+# --- Команды бота (Telegram) ---
 
 @dp.message(Command("on"))
 async def cmd_on(message):
-    await message.answer("⚡ Подаю питание на ПК...")
+    await message.answer("⚡ Подаю питание на ПК через облако...")
     try:
+        # Прямое облачное управление
+        client = ApiClient(TAPO_EMAIL, TAPO_PASSWORD)
+        device = client.p100(TAPO_IP)
         await device.turn_on()
-        await message.answer("✅ Розетка включена!")
+        await message.answer("✅ Розетка включена! ПК запускается.")
     except Exception as e:
         await message.answer(f"❌ Ошибка включения: {e}")
 
 @dp.message(Command("off"))
 async def cmd_off(message):
+    # 1. Даем команду агенту на ПК корректно выключить Windows
     await execute_query("UPDATE commands SET cmd = 'shutdown' WHERE id = 1")
-    await message.answer("🖥 Windows завершает работу. Жду 60 секунд...")
+    await message.answer("🖥 Команда выключения Windows отправлена. Жду 60 секунд...")
     
+    # 2. Ждем 60 секунд, пока Windows завершит работу
     await asyncio.sleep(60)
     
+    # 3. Физически выключаем розетку через облако
     try:
+        client = ApiClient(TAPO_EMAIL, TAPO_PASSWORD)
+        device = client.p100(TAPO_IP)
         await device.turn_off()
-        await message.answer("🔌 Розетка выключена.")
+        await message.answer("🔌 Питание обесточено.")
     except Exception as e:
-        await message.answer(f"❌ Ошибка при выключении: {e}")
+        await message.answer(f"❌ Ошибка выключения розетки: {e}")
 
 @dp.message(Command("sleep"))
 async def cmd_sleep(message):
     await execute_query("UPDATE commands SET cmd = 'sleep' WHERE id = 1")
     await message.answer("✅ Команда сна сохранена!")
 
-# --- API эндпоинт для клиента ---
+# --- API эндпоинт для агента на ПК ---
 
 @app.get("/get_task")
 async def get_task():
     result = await execute_query("SELECT cmd FROM commands WHERE id = 1")
     cmd = result[0][0]
+    # Сбрасываем команду после получения
     await execute_query("UPDATE commands SET cmd = 'none' WHERE id = 1")
     return {"command": cmd}
 
