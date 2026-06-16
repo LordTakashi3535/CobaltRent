@@ -53,7 +53,7 @@ async def cmd_on(message):
         # Прямое облачное управление
         client = ApiClient(TAPO_EMAIL, TAPO_PASSWORD)
         device = client.p100(TAPO_IP)
-        await device.turn_on()
+        await device.turnOn()
         await message.answer("✅ Розетка включена! ПК запускается.")
     except Exception as e:
         await message.answer(f"❌ Ошибка включения: {e}")
@@ -71,7 +71,7 @@ async def cmd_off(message):
     try:
         client = ApiClient(TAPO_EMAIL, TAPO_PASSWORD)
         device = client.p100(TAPO_IP)
-        await device.turn_off()
+        await device.turnOff()
         await message.answer("🔌 Питание обесточено.")
     except Exception as e:
         await message.answer(f"❌ Ошибка выключения розетки: {e}")
