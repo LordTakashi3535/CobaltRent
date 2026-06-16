@@ -4,3 +4,4 @@ aiogram
 asyncpg
 databases
 requests
+tapo
