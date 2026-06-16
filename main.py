@@ -64,9 +64,6 @@ async def cmd_off(message):
     await execute_query("UPDATE commands SET cmd = 'shutdown' WHERE id = 1")
     await message.answer("🖥 Команда выключения Windows отправлена. Жду 60 секунд...")
     
-    # 2. Ждем 60 секунд, пока Windows завершит работу
-    await asyncio.sleep(60)
-    
     # 3. Физически выключаем розетку через облако
     try:
         client = ApiClient(TAPO_EMAIL, TAPO_PASSWORD)
