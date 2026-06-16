@@ -5,19 +5,18 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from tapo import ApiClient  # Используем именно эту библиотеку
+import aiohttp
 import uvicorn
 
-# Настройки из Railway
+# Настройки
 DATABASE_URL = os.getenv("DATABASE_URL")
 API_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TAPO_EMAIL = os.getenv("TAPO_EMAIL")
-TAPO_PASSWORD = os.getenv("TAPO_PASSWORD")
-TAPO_IP = os.getenv("TAPO_IP", "192.168.1.9")
+IFTTT_KEY = os.getenv("IFTTT_KEY") # Ваш ключ от IFTTT
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
+# --- Функции БД ---
 async def execute_query(query, *args):
     conn = await asyncpg.connect(DATABASE_URL)
     result = await conn.fetch(query, *args)
@@ -26,7 +25,6 @@ async def execute_query(query, *args):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Создаем таблицу если нет
     await execute_query("CREATE TABLE IF NOT EXISTS commands (id SERIAL PRIMARY KEY, cmd TEXT)")
     count = await execute_query("SELECT COUNT(*) FROM commands")
     if count[0][0] == 0:
@@ -38,39 +36,35 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# --- Управление Tapo P110 ---
+# --- Отправка команд в IFTTT ---
+async def trigger_ifttt(event_name):
+    url = f"https://maker.ifttt.com/trigger/{event_name}/with/key/{IFTTT_KEY}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            return response.status == 200
 
-async def get_tapo_device():
-    """Функция для правильного подключения к P110"""
-    client = ApiClient(TAPO_EMAIL, TAPO_PASSWORD)
-    # ВАЖНО: для P110 используем метод p110 и ОБЯЗАТЕЛЬНО await
-    device = await client.p110(TAPO_IP) 
-    return device
-
+# --- Команды Telegram ---
 @dp.message(Command("on"))
 async def cmd_on(message):
-    await message.answer("⚡ Подключаюсь к облаку Tapo...")
-    try:
-        device = await get_tapo_device() # Ждем получения устройства
-        await device.on()                # Ждем включения
-        await message.answer("✅ Розетка P110 включена!")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка включения: {e}")
+    await message.answer("⚡ Передаю сигнал на включение розетки...")
+    success = await trigger_ifttt("pc_on")
+    if success:
+        await message.answer("✅ Розетка включена! ПК должен стартовать.")
+    else:
+        await message.answer("❌ Ошибка связи с IFTTT.")
 
 @dp.message(Command("off"))
 async def cmd_off(message):
     await execute_query("UPDATE commands SET cmd = 'shutdown' WHERE id = 1")
-    await message.answer("🖥 Команда выключения Windows отправлена...")
+    await message.answer("🖥 Компьютер выключается. Жду 60 секунд...")
     
-    try:
-        device = await get_tapo_device() # Ждем получения устройства
-        await device.off()               # Ждем выключения
-        await message.answer("🔌 Питание P110 отключено.")
-    except Exception as e:
-        await message.answer(f"❌ Ошибка выключения: {e}")
+    success = await trigger_ifttt("pc_off")
+    if success:
+        await message.answer("🔌 Питание успешно обесточено.")
+    else:
+        await message.answer("❌ Ошибка отключения розетки в IFTTT.")
 
-# --- API для Агента ---
-
+# --- API эндпоинт для агента на ПК ---
 @app.get("/get_task")
 async def get_task():
     result = await execute_query("SELECT cmd FROM commands WHERE id = 1")
