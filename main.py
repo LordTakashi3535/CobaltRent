@@ -43,18 +43,17 @@ async def execute_query(query, *args):
 # --- Инициализация и жизненный цикл ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Создаем таблицу, если нет
-    await execute_query("CREATE TABLE IF NOT EXISTS commands (id SERIAL PRIMARY KEY, cmd TEXT)")
-    # Убеждаемся, что есть одна строка
+    # Убираем SERIAL, ставим просто INTEGER
+    await execute_query("CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY, cmd TEXT)")
+    
     count = await execute_query("SELECT COUNT(*) FROM commands")
     if count[0][0] == 0:
-        await execute_query("INSERT INTO commands (cmd) VALUES ('none')")
+        # Принудительно создаем запись с id = 1
+        await execute_query("INSERT INTO commands (id, cmd) VALUES (1, 'none')")
     
-    # Запускаем бота в фоне
     print("🤖 Бот запускается...")
     task = asyncio.create_task(dp.start_polling(bot))
     yield
-    # Остановка
     task.cancel()
     print("👋 Бот остановлен.")
 
@@ -129,7 +128,7 @@ async def process_menu_buttons(callback: CallbackQuery):
     if str(callback.message.chat.id) != str(TARGET_CHAT_ID): return
     
     # Записываем команду в базу
-    await execute_query("UPDATE commands SET cmd = ? WHERE id = 1", callback.data)
+    await execute_query("UPDATE commands SET cmd = $1 WHERE id = 1", callback.data)
     
     # Обрабатываем конкретные действия для уведомлений
     if callback.data == "start_majestic":
