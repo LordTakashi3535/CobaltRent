@@ -29,6 +29,7 @@ MENU_MESSAGE_ID = None
 # --- Клавиатура меню ---
 main_keyboard = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="▶️ Запустить Majestic", callback_data="btn_start_game")],
+    [InlineKeyboardButton(text="🚗 Выставить Аренду", callback_data="btn_start_rent")], # <-- НОВАЯ КНОПКА
     [InlineKeyboardButton(text="❌ Экстренный сброс игры", callback_data="btn_kill_game")],
     [InlineKeyboardButton(text="⏹ Выключить ПК", callback_data="btn_shutdown_pc")]
 ])
@@ -131,6 +132,11 @@ async def process_menu_buttons(callback: CallbackQuery):
         await execute_query("UPDATE commands SET cmd = 'start_majestic' WHERE id = 1")
         await update_telegram_menu_status("Получена команда 'Старт'...")
         await callback.answer("Запускаю процедуру Majestic RP!")
+        
+    elif callback.data == "btn_start_rent":
+        await execute_query("UPDATE commands SET cmd = 'start_rent' WHERE id = 1")
+        await update_telegram_menu_status("Запускаю ИИ для аренды авто...")
+        await callback.answer("Бот начинает выставлять машины!")    
         
     elif callback.data == "btn_shutdown_pc":
         await execute_query("UPDATE commands SET cmd = 'shutdown' WHERE id = 1")
