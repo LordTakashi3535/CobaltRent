@@ -29,8 +29,8 @@ MENU_MESSAGE_ID = None
 # --- Клавиатура меню ---
 main_keyboard = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="▶️ Запустить Majestic", callback_data="btn_start_game")],
-    [InlineKeyboardButton(text="⏹ Выключить ПК", callback_data="btn_shutdown_pc")],
-    [InlineKeyboardButton(text="⚙️ Действие", callback_data="btn_action_stub")]
+    [InlineKeyboardButton(text="❌ Экстренный сброс игры", callback_data="btn_kill_game")],
+    [InlineKeyboardButton(text="⏹ Выключить ПК", callback_data="btn_shutdown_pc")]
 ])
 
 # --- Функции Базы Данных ---
@@ -123,25 +123,24 @@ async def cmd_off(message):
         await message.answer("❌ Ошибка отключения розетки в IFTTT.")
 
 # --- Обработка кликов по меню ---
-@dp.callback_query(F.data.in_({"btn_start_game", "btn_shutdown_pc", "btn_action_stub"}))
+@dp.callback_query(F.data.in_({"btn_start_game", "btn_shutdown_pc", "btn_kill_game"}))
 async def process_menu_buttons(callback: CallbackQuery):
     if str(callback.message.chat.id) != str(TARGET_CHAT_ID): return
     
     if callback.data == "btn_start_game":
-        # Ставим команду на запуск
         await execute_query("UPDATE commands SET cmd = 'start_majestic' WHERE id = 1")
-        # Сразу обновляем статус локально
         await update_telegram_menu_status("Получена команда 'Старт'...")
         await callback.answer("Запускаю процедуру Majestic RP!")
         
     elif callback.data == "btn_shutdown_pc":
-        # Ставим команду на выключение (для удобства из меню)
         await execute_query("UPDATE commands SET cmd = 'shutdown' WHERE id = 1")
         await update_telegram_menu_status("Получена команда 'Выключение'...")
         await callback.answer("Компьютер будет выключен.")
         
-    elif callback.data == "btn_action_stub":
-        await callback.answer("⚙️ Действие в разработке!", show_alert=True)
+    elif callback.data == "btn_kill_game":
+        await execute_query("UPDATE commands SET cmd = 'kill_game' WHERE id = 1")
+        await update_telegram_menu_status("Закрываю зависшие процессы...")
+        await callback.answer("Команда на экстренный сброс отправлена!")
 
 # ================================
 # --- API ЭНДПОИНТЫ ДЛЯ АГЕНТА ---
