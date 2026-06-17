@@ -124,7 +124,7 @@ async def cmd_off(message):
         await message.answer("❌ Ошибка отключения розетки в IFTTT.")
 
 # --- Обработка кликов по меню ---
-@dp.callback_query(F.data.in_({"btn_start_game", "btn_shutdown_pc", "btn_kill_game"}))
+@dp.callback_query(F.data.in_({"btn_start_game", "btn_start_rent", "btn_shutdown_pc", "btn_kill_game"}))
 async def process_menu_buttons(callback: CallbackQuery):
     if str(callback.message.chat.id) != str(TARGET_CHAT_ID): return
     
