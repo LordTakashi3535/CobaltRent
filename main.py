@@ -26,12 +26,11 @@ dp = Dispatcher()
 # (Она сбросится при перезагрузке сервера на Railway, но это не критично)
 MENU_MESSAGE_ID = None
 
-# --- Клавиатура меню ---
 main_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="▶️ Запустить Majestic", callback_data="btn_start_game")],
-    [InlineKeyboardButton(text="🚗 Выставить Аренду", callback_data="btn_start_rent")], # <-- НОВАЯ КНОПКА
-    [InlineKeyboardButton(text="❌ Экстренный сброс игры", callback_data="btn_kill_game")],
-    [InlineKeyboardButton(text="⏹ Выключить ПК", callback_data="btn_shutdown_pc")]
+    [InlineKeyboardButton(text="▶️ Запустить Majestic", callback_data="start_majestic")],
+    [InlineKeyboardButton(text="🚗 Выставить Аренду", callback_data="start_rent")],
+    [InlineKeyboardButton(text="❌ Экстренный сброс игры", callback_data="kill_game")],
+    [InlineKeyboardButton(text="⏹ Выключить ПК", callback_data="shutdown")]
 ])
 
 # --- Функции Базы Данных ---
@@ -122,29 +121,30 @@ async def cmd_off(message):
         await message.answer("✅ Розетка отключена.")
     else:
         await message.answer("❌ Ошибка отключения розетки в IFTTT.")
-
+    
 # --- Обработка кликов по меню ---
-@dp.callback_query(F.data.in_({"btn_start_game", "btn_start_rent", "btn_shutdown_pc", "btn_kill_game"}))
+# Исправленный обработчик
+@dp.callback_query(F.data.in_({"start_majestic", "start_rent", "kill_game", "shutdown"}))
 async def process_menu_buttons(callback: CallbackQuery):
     if str(callback.message.chat.id) != str(TARGET_CHAT_ID): return
     
-    if callback.data == "btn_start_game":
-        await execute_query("UPDATE commands SET cmd = 'start_majestic' WHERE id = 1")
+    # Записываем команду в базу
+    await execute_query("UPDATE commands SET cmd = ? WHERE id = 1", callback.data)
+    
+    # Обрабатываем конкретные действия для уведомлений
+    if callback.data == "start_majestic":
         await update_telegram_menu_status("Получена команда 'Старт'...")
         await callback.answer("Запускаю процедуру Majestic RP!")
         
-    elif callback.data == "btn_start_rent":
-        await execute_query("UPDATE commands SET cmd = 'start_rent' WHERE id = 1")
+    elif callback.data == "start_rent":
         await update_telegram_menu_status("Запускаю ИИ для аренды авто...")
         await callback.answer("Бот начинает выставлять машины!")    
         
-    elif callback.data == "btn_shutdown_pc":
-        await execute_query("UPDATE commands SET cmd = 'shutdown' WHERE id = 1")
+    elif callback.data == "shutdown":
         await update_telegram_menu_status("Получена команда 'Выключение'...")
         await callback.answer("Компьютер будет выключен.")
         
-    elif callback.data == "btn_kill_game":
-        await execute_query("UPDATE commands SET cmd = 'kill_game' WHERE id = 1")
+    elif callback.data == "kill_game":
         await update_telegram_menu_status("Закрываю зависшие процессы...")
         await callback.answer("Команда на экстренный сброс отправлена!")
 
