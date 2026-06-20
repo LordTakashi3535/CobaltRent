@@ -25,7 +25,7 @@ TARGET_CHAT_ID = os.getenv("CHAT_ID")
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID", 0))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 SESSION_STRING = os.getenv("SESSION_STRING", "")
-MAJESTIC_BOT_USERNAME = '@majestic_rp_bot'
+MAJESTIC_BOT_USERNAME = '@MajesticRolePlayBot'
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
@@ -50,7 +50,7 @@ async def execute_query(query, *args):
 # Создаем сессию из нашей длинной текстовой строки
 userbot = TelegramClient(StringSession(SESSION_STRING), TELEGRAM_API_ID, TELEGRAM_API_HASH)
 
-@userbot.on(events.NewMessage(chats=@MajesticRolePlayBot))
+@userbot.on(events.NewMessage(chats=MAJESTIC_BOT_USERNAME))
 async def handle_receipt(event):
     text = event.message.text
     if text and "Транспорт сдан в аренду!" in text:
