@@ -5,3 +5,4 @@ asyncpg
 databases
 requests
 aiohttp
+telethon==1.33.1
