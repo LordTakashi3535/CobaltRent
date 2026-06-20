@@ -30,12 +30,13 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 MENU_MESSAGE_ID = None
 
-# Обновленное меню с кнопками включения/выключения
+# Обновленное меню с кнопками включения/выключения и таймером
 main_keyboard = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="▶️ Запустить Majestic", callback_data="start_majestic"),
      InlineKeyboardButton(text="🚗 Выставить Аренду", callback_data="start_rent")],
     [InlineKeyboardButton(text="⚡ Включить ПК", callback_data="turn_on"),
      InlineKeyboardButton(text="🛑 Выключить ПК", callback_data="shutdown")],
+    [InlineKeyboardButton(text="⏳ Авто в аренде (Таймеры)", callback_data="show_timers")],
     [InlineKeyboardButton(text="❌ Экстренный сброс игры", callback_data="kill_game")]
 ])
 
@@ -119,8 +120,10 @@ async def lifespan(app: FastAPI):
     """)
     
     # Безопасное обновление таблицы, если она была создана в прошлый раз без created_at
-    try: await execute_query("ALTER TABLE rent_stats ADD COLUMN created_at TIMESTAMP DEFAULT NOW()")
-    except Exception: pass
+    try: 
+        await execute_query("ALTER TABLE rent_stats ADD COLUMN created_at TIMESTAMP DEFAULT NOW()")
+    except Exception: 
+        pass
     
     count = await execute_query("SELECT COUNT(*) FROM commands")
     if count[0][0] == 0:
@@ -217,7 +220,7 @@ async def cmd_off(message):
     await message.answer("🖥 Команда на выключение ПК отправлена. Обесточу через 60 сек.")
     asyncio.create_task(shutdown_pc_task())
 
-@dp.callback_query(F.data.in_({"start_majestic", "start_rent", "kill_game", "shutdown", "turn_on", "clear_stats"}))
+@dp.callback_query(F.data.in_({"start_majestic", "start_rent", "kill_game", "shutdown", "turn_on", "clear_stats", "show_timers"}))
 async def process_menu_buttons(callback: CallbackQuery):
     if str(callback.message.chat.id) != str(TARGET_CHAT_ID): return
     
@@ -235,6 +238,32 @@ async def process_menu_buttons(callback: CallbackQuery):
         await execute_query("DELETE FROM rent_stats")
         await callback.message.edit_text("✅ Статистика успешно очищена!")
         await callback.answer("База стерта")
+        
+    elif callback.data == "show_timers":
+        # Достаем все машины, у которых время окончания аренды больше, чем текущее время
+        query = "SELECT car_name, rent_end FROM rent_stats WHERE rent_end > NOW() ORDER BY rent_end ASC"
+        active_rents = await execute_query(query)
+        
+        if not active_rents:
+            await callback.message.answer("🤷‍♂️ Прямо сейчас нет машин в аренде.")
+            await callback.answer()
+            return
+            
+        text = "⏳ <b>Таймеры текущих аренд:</b>\n\n"
+        now = datetime.now()
+        
+        for car_name, rent_end in active_rents:
+            diff = rent_end - now
+            if diff.total_seconds() > 0:
+                hours, remainder = divmod(int(diff.total_seconds()), 3600)
+                minutes, _ = divmod(remainder, 60)
+                
+                # Формируем красивый вывод
+                time_left_str = f"{hours} ч. {minutes} мин." if hours > 0 else f"{minutes} мин."
+                text += f"🚗 <b>{car_name}</b> — осталось: {time_left_str} (до {rent_end.strftime('%H:%M')})\n"
+        
+        await callback.message.answer(text, parse_mode="HTML")
+        await callback.answer()
         
     else:
         # Передаем команды start_majestic, start_rent, kill_game агенту на ПК
