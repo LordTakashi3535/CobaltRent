@@ -21,6 +21,7 @@ API_TOKEN = os.getenv("TELEGRAM_TOKEN")
 IFTTT_KEY = os.getenv("IFTTT_KEY")
 TARGET_CHAT_ID = os.getenv("CHAT_ID") 
 
+# Переменные для Юзербота
 TELEGRAM_API_ID = int(os.getenv("TELEGRAM_API_ID", 0))
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 SESSION_STRING = os.getenv("SESSION_STRING", "")
@@ -52,8 +53,21 @@ userbot = TelegramClient(StringSession(SESSION_STRING), TELEGRAM_API_ID, TELEGRA
 @userbot.on(events.NewMessage(chats=MAJESTIC_BOT_USERNAME))
 async def handle_receipt(event):
     text = event.message.text
-    if "Транспорт сдан в аренду!" in text:
+    if text and "Транспорт сдан в аренду!" in text:
         print("📩 Юзербот поймал чек! Обрабатываем...")
+        
+        # 1. СРАЗУ отправляем оригинальный текст чека тебе в Telegram
+        if TARGET_CHAT_ID:
+            try:
+                await bot.send_message(
+                    chat_id=TARGET_CHAT_ID,
+                    text=f"🔔 <b>Новая сдача в аренду!</b>\n\n{text}",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                print(f"❌ Ошибка отправки уведомления в ТГ: {e}")
+
+        # 2. ПРОСТО записываем данные в базу для статистики
         try:
             car_match = re.search(r"Транспорт:\s*(.+)", text)
             car_name = car_match.group(1).strip() if car_match else "Неизвестно"
@@ -74,22 +88,10 @@ async def handle_receipt(event):
                 "INSERT INTO rent_stats (car_name, price, duration, refund, rent_end) VALUES ($1, $2, $3, $4, $5)",
                 car_name, price, duration, refund, rent_end
             )
-
-            # Отправляем уведомление владельцу через основного бота
-            if TARGET_CHAT_ID:
-                await bot.send_message(
-                    chat_id=TARGET_CHAT_ID,
-                    text=(
-                        f"📊 <b>Сделка зафиксирована!</b>\n"
-                        f"🚗 Авто: {car_name}\n"
-                        f"💰 Прибыль: {price}$\n"
-                        f"💵 Возврат: {refund}$\n"
-                        f"⏳ Освободится: {rent_end.strftime('%d.%m %H:%M')}"
-                    ),
-                    parse_mode="HTML"
-                )
+            print("✅ Чек успешно сохранен в базу данных!")
+            
         except Exception as e:
-            print(f"❌ Ошибка обработки чека: {e}")
+            print(f"❌ Ошибка парсинга или записи в БД: {e}")
 
 # ==========================================
 # --- ЖИЗНЕННЫЙ ЦИКЛ СЕРВЕРА ---
