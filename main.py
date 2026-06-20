@@ -50,7 +50,7 @@ async def execute_query(query, *args):
 # Создаем сессию из нашей длинной текстовой строки
 userbot = TelegramClient(StringSession(SESSION_STRING), TELEGRAM_API_ID, TELEGRAM_API_HASH)
 
-@userbot.on(events.NewMessage(chats=MAJESTIC_BOT_USERNAME))
+@userbot.on(events.NewMessage(chats=@MajesticRolePlayBot))
 async def handle_receipt(event):
     text = event.message.text
     if text and "Транспорт сдан в аренду!" in text:
