@@ -7,7 +7,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 import aiohttp
 import uvicorn
 from telethon import TelegramClient, events
@@ -29,6 +31,12 @@ MAJESTIC_BOT_USERNAME = '@MajesticRolePlayBot'
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
+# --- СОСТОЯНИЯ FSM ДЛЯ ДОБАВЛЕНИЯ/РЕДАКТИРОВАНИЯ АВТО ---
+class FleetStates(StatesGroup):
+    waiting_for_new_car_name = State()
+    waiting_for_new_car_price = State()
+    waiting_for_edit_price = State()
+
 async def execute_query(query, *args):
     conn = await asyncpg.connect(DATABASE_URL)
     result = await conn.fetch(query, *args)
@@ -44,9 +52,10 @@ def get_main_keyboard():
          InlineKeyboardButton(text="🚗 Выставить Аренду", callback_data="cmd_start_rent")],
         [InlineKeyboardButton(text="⚡ Вкл ПК", callback_data="cmd_turn_on"),
          InlineKeyboardButton(text="🛑 Выкл ПК", callback_data="cmd_shutdown"),
-         InlineKeyboardButton(text="❌ Сброс игры", callback_data="cmd_kill_game")],
-        [InlineKeyboardButton(text="⏳ Таймеры аренд", callback_data="menu_timers"),
-         InlineKeyboardButton(text="📊 Статистика", callback_data="menu_stats")]
+         InlineKeyboardButton(text="❌ Сброс", callback_data="cmd_kill_game")],
+        [InlineKeyboardButton(text="⏳ Таймеры", callback_data="menu_timers"),
+         InlineKeyboardButton(text="📊 Статистика", callback_data="menu_stats")],
+        [InlineKeyboardButton(text="⚙️ Автопарк и Цены", callback_data="menu_fleet")]
     ])
 
 def get_back_keyboard():
@@ -55,21 +64,15 @@ def get_back_keyboard():
     ])
 
 async def update_dashboard_ui():
-    """Собирает данные и обновляет единое сообщение-пульт"""
     if not TARGET_CHAT_ID: return
-    
     row = await execute_query("SELECT last_ping, status_text, menu_id FROM commands WHERE id = 1")
     if not row: return
     last_ping, status_text, menu_id = row[0]
+    if not menu_id: return 
     
-    if not menu_id: return # Меню еще не создано
-    
-    # Проверяем, жив ли агент на ПК (если пинговал сервер меньше 90 сек назад - онлайн)
     is_online = False
-    if last_ping:
-        diff = datetime.now() - last_ping
-        if diff.total_seconds() < 90:
-            is_online = True
+    if last_ping and (datetime.now() - last_ping).total_seconds() < 90:
+        is_online = True
             
     status_icon = "🟢 <b>Онлайн</b>" if is_online else "🔴 <b>Оффлайн</b>"
     text_status = status_text if status_text else "Ожидание команд..."
@@ -82,17 +85,9 @@ async def update_dashboard_ui():
         f"➖➖➖➖➖➖➖➖➖➖\n"
         f"Выберите действие:"
     )
-    
     try:
-        await bot.edit_message_text(
-            chat_id=TARGET_CHAT_ID, 
-            message_id=menu_id,
-            text=text, 
-            reply_markup=get_main_keyboard(), 
-            parse_mode="HTML"
-        )
-    except Exception:
-        pass # Игнорируем ошибку, если текст не изменился
+        await bot.edit_message_text(chat_id=TARGET_CHAT_ID, message_id=menu_id, text=text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+    except Exception: pass
 
 # ==========================================
 # --- АВТОМАТИЧЕСКИЕ УВЕДОМЛЕНИЯ ---
@@ -107,11 +102,7 @@ async def check_expired_rents():
                     rent_id, car_name = row[0], row[1]
                     if TARGET_CHAT_ID:
                         try:
-                            await bot.send_message(
-                                chat_id=TARGET_CHAT_ID,
-                                text=f"🟢 <b>Автомобиль вернулся!</b>\n\n🚗 <b>{car_name}</b> вышел из аренды.\nПора снова включать ПК и выставлять!",
-                                parse_mode="HTML"
-                            )
+                            await bot.send_message(chat_id=TARGET_CHAT_ID, text=f"🟢 <b>Автомобиль вернулся!</b>\n\n🚗 <b>{car_name}</b> вышел из аренды.\nПора снова включать ПК и выставлять!", parse_mode="HTML")
                         except Exception: pass
                     await execute_query("UPDATE rent_stats SET notified = TRUE WHERE id = $1", rent_id)
         except Exception: pass
@@ -139,17 +130,9 @@ async def handle_receipt(event):
             rent_end = datetime.now() + timedelta(hours=duration)
             net_profit = price - 1250 + refund
 
-            await execute_query(
-                "INSERT INTO rent_stats (car_name, price, duration, refund, rent_end, notified) VALUES ($1, $2, $3, $4, $5, FALSE)",
-                car_name, price, duration, refund, rent_end
-            )
-            
+            await execute_query("INSERT INTO rent_stats (car_name, price, duration, refund, rent_end, notified) VALUES ($1, $2, $3, $4, $5, FALSE)", car_name, price, duration, refund, rent_end)
             if TARGET_CHAT_ID:
-                await bot.send_message(
-                    chat_id=TARGET_CHAT_ID,
-                    text=(f"🔔 <b>Новая сдача в аренду!</b>\n\n🚗 Авто: <b>{car_name}</b>\n💰 <b>Чистая прибыль: {net_profit}$</b>\n⏳ Освободится: {rent_end.strftime('%d.%m %H:%M')}"),
-                    parse_mode="HTML"
-                )
+                await bot.send_message(chat_id=TARGET_CHAT_ID, text=(f"🔔 <b>Новая сдача в аренду!</b>\n\n🚗 Авто: <b>{car_name}</b>\n💰 <b>Чистая прибыль: {net_profit}$</b>\n⏳ Освободится: {rent_end.strftime('%d.%m %H:%M')}"), parse_mode="HTML")
         except Exception: pass
 
 # ==========================================
@@ -157,15 +140,16 @@ async def handle_receipt(event):
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await execute_query("CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY, cmd TEXT)")
+    await execute_query("CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY, cmd TEXT, last_ping TIMESTAMP, menu_id BIGINT, status_text TEXT DEFAULT 'Ожидание')")
     
-    # Добавляем новые колонки для умного меню, если их нет
-    try: await execute_query("ALTER TABLE commands ADD COLUMN last_ping TIMESTAMP")
-    except Exception: pass
-    try: await execute_query("ALTER TABLE commands ADD COLUMN menu_id BIGINT")
-    except Exception: pass
-    try: await execute_query("ALTER TABLE commands ADD COLUMN status_text TEXT DEFAULT 'Ожидание'")
-    except Exception: pass
+    # НОВАЯ ТАБЛИЦА: Автопарк
+    await execute_query("""
+        CREATE TABLE IF NOT EXISTS fleet (
+            id SERIAL PRIMARY KEY,
+            car_name TEXT UNIQUE,
+            price INTEGER
+        )
+    """)
     
     await execute_query("""
         CREATE TABLE IF NOT EXISTS rent_stats (
@@ -175,8 +159,7 @@ async def lifespan(app: FastAPI):
     """)
     
     count = await execute_query("SELECT COUNT(*) FROM commands")
-    if count[0][0] == 0:
-        await execute_query("INSERT INTO commands (id, cmd) VALUES (1, 'none')")
+    if count[0][0] == 0: await execute_query("INSERT INTO commands (id, cmd) VALUES (1, 'none')")
     
     bot_task = asyncio.create_task(dp.start_polling(bot))
     await userbot.connect()
@@ -199,8 +182,7 @@ async def trigger_ifttt(event_name):
     url = f"https://maker.ifttt.com/trigger/{event_name}/with/key/{IFTTT_KEY}"
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url, timeout=10) as response:
-                return response.status == 200
+            async with session.get(url, timeout=10) as response: return response.status == 200
         except: return False
 
 async def shutdown_pc_task():
@@ -215,27 +197,22 @@ async def shutdown_pc_task():
 # --- ОБРАБОТЧИКИ TELEGRAM ---
 # ==========================================
 @dp.message(Command("menu", "start"))
-async def cmd_menu(message):
-    """Вызов новой панели управления (старая удалится)"""
+async def cmd_menu(message: Message, state: FSMContext):
+    await state.clear() # Сбрасываем состояния, если они были
     if str(message.chat.id) != str(TARGET_CHAT_ID): return
-    
-    # Удаляем сообщение с командой от пользователя, чтобы не мусорить
     try: await message.delete()
     except Exception: pass
-    
     msg = await message.answer("🔄 Загрузка панели управления...", parse_mode="HTML")
     await execute_query("UPDATE commands SET menu_id = $1 WHERE id = 1", msg.message_id)
     await update_dashboard_ui()
 
 @dp.callback_query()
-async def process_callbacks(callback: CallbackQuery):
+async def process_callbacks(callback: CallbackQuery, state: FSMContext):
     if str(callback.message.chat.id) != str(TARGET_CHAT_ID): return
     data = callback.data
     
-    # 1. КОМАНДЫ ДЛЯ ПК
     if data.startswith("cmd_"):
         command = data.replace("cmd_", "")
-        
         if command == "turn_on":
             await trigger_ifttt("pc_on")
             await execute_query("UPDATE commands SET status_text = '⚡ Отправлен IFTTT сигнал на включение' WHERE id=1")
@@ -246,14 +223,11 @@ async def process_callbacks(callback: CallbackQuery):
         else:
             await execute_query("UPDATE commands SET cmd = $1, status_text = $2 WHERE id = 1", command, f"Отправлена команда: {command}")
             await callback.answer("Команда в очереди!")
-            
         await update_dashboard_ui()
         
-    # 2. ПОДМЕНЮ ТАЙМЕРОВ
     elif data == "menu_timers":
         active_rents = await execute_query("SELECT car_name, rent_end FROM rent_stats WHERE rent_end > NOW() ORDER BY rent_end ASC")
-        if not active_rents:
-            text = "🤷‍♂️ <b>Прямо сейчас нет машин в аренде.</b>"
+        if not active_rents: text = "🤷‍♂️ <b>Прямо сейчас нет машин в аренде.</b>"
         else:
             text = "⏳ <b>Таймеры текущих аренд:</b>\n\n"
             now = datetime.now()
@@ -264,74 +238,126 @@ async def process_callbacks(callback: CallbackQuery):
                     minutes, _ = divmod(remainder, 60)
                     time_left = f"{hours} ч. {minutes} мин." if hours > 0 else f"{minutes} мин."
                     text += f"🚗 <b>{car_name}</b> — осталось: {time_left} (до {rent_end.strftime('%H:%M')})\n"
-        
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=get_back_keyboard())
         
-    # 3. ПОДМЕНЮ СТАТИСТИКИ
     elif data == "menu_stats":
         try:
             res_today = await execute_query("SELECT COALESCE(SUM(price - 1250 + refund), 0), COUNT(*) FROM rent_stats WHERE created_at >= CURRENT_DATE")
             res_yest = await execute_query("SELECT COALESCE(SUM(price - 1250 + refund), 0), COUNT(*) FROM rent_stats WHERE created_at >= CURRENT_DATE - INTERVAL '1 day' AND created_at < CURRENT_DATE")
             res_7 = await execute_query("SELECT COALESCE(SUM(price - 1250 + refund), 0), COUNT(*) FROM rent_stats WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'")
-            
-            # НОВЫЙ ЗАПРОС: Доход по каждой машине именно за СЕГОДНЯ
             res_cars_today = await execute_query("SELECT car_name, COALESCE(SUM(price - 1250 + refund), 0) as total, COUNT(*) FROM rent_stats WHERE created_at >= CURRENT_DATE GROUP BY car_name ORDER BY total DESC")
-            
-            # Доход за все время (ограничим топ-5, чтобы меню не раздувалось)
             res_cars_all = await execute_query("SELECT car_name, COALESCE(SUM(price - 1250 + refund), 0) as total FROM rent_stats GROUP BY car_name ORDER BY total DESC LIMIT 5")
             
-            text = (f"📊 <b>Статистика Аренды</b>\n\n"
-                    f"🔹 <b>Сегодня:</b> {res_today[0][0]}$ ({res_today[0][1]} сдач)\n"
-                    f"🔹 <b>Вчера:</b> {res_yest[0][0]}$ ({res_yest[0][1]} сдач)\n"
-                    f"🔹 <b>За 7 дней:</b> {res_7[0][0]}$ ({res_7[0][1]} сдач)\n\n"
-                    f"🚗 <b>Доход авто за СЕГОДНЯ:</b>\n")
-            
+            text = (f"📊 <b>Статистика Аренды</b>\n\n🔹 <b>Сегодня:</b> {res_today[0][0]}$ ({res_today[0][1]} сдач)\n🔹 <b>Вчера:</b> {res_yest[0][0]}$ ({res_yest[0][1]} сдач)\n🔹 <b>За 7 дней:</b> {res_7[0][0]}$ ({res_7[0][1]} сдач)\n\n🚗 <b>Доход авто за СЕГОДНЯ:</b>\n")
             if res_cars_today:
-                for car_name, total, count in res_cars_today:
-                    text += f"▫️ {car_name}: {total}$ (x{count})\n"
-            else:
-                text += "▫️ Пока нет сдач\n"
-                
+                for car_name, total, count in res_cars_today: text += f"▫️ {car_name}: {total}$ (x{count})\n"
+            else: text += "▫️ Пока нет сдач\n"
             text += f"\n🏆 <b>Топ-5 авто (всё время):</b>\n"
             if res_cars_all:
-                for car_name, total in res_cars_all: 
-                    text += f"▫️ {car_name}: {total}$\n"
-            else: 
-                text += "▫️ Пока нет данных\n"
+                for car_name, total in res_cars_all: text += f"▫️ {car_name}: {total}$\n"
+            else: text += "▫️ Пока нет данных\n"
             
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🗑 Очистить базу", callback_data="cmd_clear_stats")],
-                [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_main")]
-            ])
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🗑 Очистить базу", callback_data="cmd_clear_stats")], [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_main")]])
             await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
-        except Exception as e:
-            await callback.answer(f"Ошибка: {e}")
-            
-    # Очистка статы из подменю
+        except Exception as e: await callback.answer(f"Ошибка: {e}")
+        
     elif data == "cmd_clear_stats":
         await execute_query("DELETE FROM rent_stats")
         await callback.answer("База стерта!", show_alert=True)
-        await update_dashboard_ui() # Возвращаем в главное меню
-        
-    # 4. ВОЗВРАТ В ГЛАВНОЕ МЕНЮ
-    elif data == "menu_main":
         await update_dashboard_ui()
+        
+    # --- БЛОК АВТОПАРКА ---
+    elif data == "menu_fleet":
+        cars = await execute_query("SELECT id, car_name, price FROM fleet ORDER BY id ASC")
+        text = "⚙️ <b>Твой Автопарк</b>\n\n"
+        
+        keyboard = []
+        if not cars: text += "🤷‍♂️ <i>В базе пока нет ни одной машины.</i>\n\n"
+        else:
+            for car_id, name, price in cars:
+                text += f"🚗 <b>{name}</b> — {price}$/ч\n"
+                # Создаем кнопки редактирования и удаления для каждой машины
+                keyboard.append([
+                    InlineKeyboardButton(text=f"✏️ Цена {name}", callback_data=f"editcar_{car_id}"),
+                    InlineKeyboardButton(text=f"❌ Удал. {name}", callback_data=f"delcar_{car_id}")
+                ])
+                
+        keyboard.append([InlineKeyboardButton(text="➕ Добавить новое авто", callback_data="add_car")])
+        keyboard.append([InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_main")])
+        
+        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
+
+    elif data == "add_car":
+        await callback.message.answer("📝 <b>Пришли мне точное название авто из игры:</b>\n<i>(Например: RL Daimler Runner)</i>", parse_mode="HTML")
+        await state.set_state(FleetStates.waiting_for_new_car_name)
+        await callback.answer()
+
+    elif data.startswith("delcar_"):
+        car_id = int(data.split("_")[1])
+        await execute_query("DELETE FROM fleet WHERE id = $1", car_id)
+        await callback.answer("Авто удалено!")
+        # Искусственно вызываем обновление меню автопарка
+        await process_callbacks(callback.model_copy(update={'data': 'menu_fleet'}), state)
+        
+    elif data.startswith("editcar_"):
+        car_id = int(data.split("_")[1])
+        await state.update_data(edit_car_id=car_id)
+        await callback.message.answer("💵 <b>Пришли новую цену аренды за час (только цифры):</b>", parse_mode="HTML")
+        await state.set_state(FleetStates.waiting_for_edit_price)
+        await callback.answer()
+
+    elif data == "menu_main":
+        await state.clear()
+        await update_dashboard_ui()
+
+# --- ОБРАБОТЧИКИ ВВОДА ТЕКСТА (ДЛЯ АВТОПАРКА) ---
+@dp.message(FleetStates.waiting_for_new_car_name)
+async def process_new_car_name(message: Message, state: FSMContext):
+    await state.update_data(car_name=message.text.strip())
+    await message.answer("💵 <b>Отлично! Теперь напиши цену аренды за час (только цифры):</b>", parse_mode="HTML")
+    await state.set_state(FleetStates.waiting_for_new_car_price)
+
+@dp.message(FleetStates.waiting_for_new_car_price)
+async def process_new_car_price(message: Message, state: FSMContext):
+    try:
+        price = int(message.text.strip())
+        data = await state.get_data()
+        car_name = data['car_name']
+        
+        await execute_query("INSERT INTO fleet (car_name, price) VALUES ($1, $2) ON CONFLICT (car_name) DO UPDATE SET price = EXCLUDED.price", car_name, price)
+        await message.answer(f"✅ Машина <b>{car_name}</b> добавлена в базу с ценой {price}$/ч!", parse_mode="HTML")
+        await state.clear()
+        
+        # Обновляем основной Dashboard
+        await update_dashboard_ui()
+    except ValueError:
+        await message.answer("⚠️ Пожалуйста, введи цену только цифрами (без букв и знаков $).")
+
+@dp.message(FleetStates.waiting_for_edit_price)
+async def process_edit_car_price(message: Message, state: FSMContext):
+    try:
+        price = int(message.text.strip())
+        data = await state.get_data()
+        car_id = data['edit_car_id']
+        
+        await execute_query("UPDATE fleet SET price = $1 WHERE id = $2", price, car_id)
+        await message.answer(f"✅ Цена успешно обновлена на {price}$/ч!", parse_mode="HTML")
+        await state.clear()
+        
+        await update_dashboard_ui()
+    except ValueError:
+        await message.answer("⚠️ Пожалуйста, введи новую цену только цифрами.")
 
 # ==========================================
 # --- API ДЛЯ АГЕНТА НА ПК ---
 # ==========================================
 @app.get("/get_task")
 async def get_task():
-    # Каждый запрос от ПК обновляет время "последнего пинга" в БД
     await execute_query("UPDATE commands SET last_ping = NOW() WHERE id = 1")
-    
     result = await execute_query("SELECT cmd FROM commands WHERE id = 1")
     if not result: raise HTTPException(status_code=500)
     cmd = result[0][0]
-    
-    if cmd != 'none': 
-        await execute_query("UPDATE commands SET cmd = 'none' WHERE id = 1")
-        
+    if cmd != 'none': await execute_query("UPDATE commands SET cmd = 'none' WHERE id = 1")
     return {"command": cmd}
 
 @app.get("/agent_started")
@@ -342,10 +368,15 @@ async def api_agent_started():
 
 @app.get("/update_status")
 async def api_update_status(text: str):
-    # ПК присылает нам текстовые статусы своих шагов, мы их выводим в меню
     await execute_query("UPDATE commands SET status_text = $1 WHERE id = 1", text)
     await update_dashboard_ui()
     return {"status": "ok"}
+
+# НОВЫЙ ЭНДПОИНТ: Отдаем список машин для ПК
+@app.get("/get_fleet")
+async def api_get_fleet():
+    cars = await execute_query("SELECT car_name, price FROM fleet")
+    return {"fleet": [{"name": c[0], "price": c[1]} for c in cars]}
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
