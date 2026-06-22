@@ -273,16 +273,31 @@ async def process_callbacks(callback: CallbackQuery):
             res_today = await execute_query("SELECT COALESCE(SUM(price - 1250 + refund), 0), COUNT(*) FROM rent_stats WHERE created_at >= CURRENT_DATE")
             res_yest = await execute_query("SELECT COALESCE(SUM(price - 1250 + refund), 0), COUNT(*) FROM rent_stats WHERE created_at >= CURRENT_DATE - INTERVAL '1 day' AND created_at < CURRENT_DATE")
             res_7 = await execute_query("SELECT COALESCE(SUM(price - 1250 + refund), 0), COUNT(*) FROM rent_stats WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'")
-            res_cars = await execute_query("SELECT car_name, COALESCE(SUM(price - 1250 + refund), 0) as total FROM rent_stats GROUP BY car_name ORDER BY total DESC")
+            
+            # НОВЫЙ ЗАПРОС: Доход по каждой машине именно за СЕГОДНЯ
+            res_cars_today = await execute_query("SELECT car_name, COALESCE(SUM(price - 1250 + refund), 0) as total, COUNT(*) FROM rent_stats WHERE created_at >= CURRENT_DATE GROUP BY car_name ORDER BY total DESC")
+            
+            # Доход за все время (ограничим топ-5, чтобы меню не раздувалось)
+            res_cars_all = await execute_query("SELECT car_name, COALESCE(SUM(price - 1250 + refund), 0) as total FROM rent_stats GROUP BY car_name ORDER BY total DESC LIMIT 5")
             
             text = (f"📊 <b>Статистика Аренды</b>\n\n"
-                    f"🔹 <b>Сегодня:</b> {res_today[0][0]}$ ({res_today[0][1]} авто)\n"
-                    f"🔹 <b>Вчера:</b> {res_yest[0][0]}$ ({res_yest[0][1]} авто)\n"
-                    f"🔹 <b>За 7 дней:</b> {res_7[0][0]}$ ({res_7[0][1]} авто)\n\n"
-                    f"🏆 <b>Доход по авто:</b>\n")
-            if res_cars:
-                for car_name, total in res_cars: text += f"▫️ {car_name}: {total}$\n"
-            else: text += "▫️ Пока нет данных\n"
+                    f"🔹 <b>Сегодня:</b> {res_today[0][0]}$ ({res_today[0][1]} сдач)\n"
+                    f"🔹 <b>Вчера:</b> {res_yest[0][0]}$ ({res_yest[0][1]} сдач)\n"
+                    f"🔹 <b>За 7 дней:</b> {res_7[0][0]}$ ({res_7[0][1]} сдач)\n\n"
+                    f"🚗 <b>Доход авто за СЕГОДНЯ:</b>\n")
+            
+            if res_cars_today:
+                for car_name, total, count in res_cars_today:
+                    text += f"▫️ {car_name}: {total}$ (x{count})\n"
+            else:
+                text += "▫️ Пока нет сдач\n"
+                
+            text += f"\n🏆 <b>Топ-5 авто (всё время):</b>\n"
+            if res_cars_all:
+                for car_name, total in res_cars_all: 
+                    text += f"▫️ {car_name}: {total}$\n"
+            else: 
+                text += "▫️ Пока нет данных\n"
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🗑 Очистить базу", callback_data="cmd_clear_stats")],
