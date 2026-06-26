@@ -48,14 +48,22 @@ async def execute_query(query, *args):
 # ==========================================
 def get_main_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="▶️ Запустить Majestic", callback_data="cmd_start_majestic"),
-         InlineKeyboardButton(text="🚗 Выставить Аренду", callback_data="cmd_start_rent")],
-        [InlineKeyboardButton(text="⚡ Вкл ПК", callback_data="cmd_turn_on"),
-         InlineKeyboardButton(text="🛑 Выкл ПК", callback_data="cmd_shutdown"),
-         InlineKeyboardButton(text="❌ Сброс", callback_data="cmd_kill_game")],
+        [InlineKeyboardButton(text="🤖 ПОЛНЫЙ АВТО-ЦИКЛ", callback_data="cmd_full_auto")],
+        [InlineKeyboardButton(text="🕹 Ручное управление", callback_data="menu_manual")],
         [InlineKeyboardButton(text="⏳ Таймеры", callback_data="menu_timers"),
          InlineKeyboardButton(text="📊 Статистика", callback_data="menu_stats")],
         [InlineKeyboardButton(text="⚙️ Автопарк и Цены", callback_data="menu_fleet")]
+    ])
+
+def get_manual_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="▶️ Запуск Majestic", callback_data="cmd_start_majestic"),
+         InlineKeyboardButton(text="🚗 Старт Аренды", callback_data="cmd_start_rent")],
+        [InlineKeyboardButton(text="⚡ Вкл ПК", callback_data="cmd_turn_on"),
+         InlineKeyboardButton(text="🛑 Выкл ПК", callback_data="cmd_shutdown")],
+        [InlineKeyboardButton(text="🛑 ОСТАНОВИТЬ БОТА", callback_data="cmd_stop_bot"),
+         InlineKeyboardButton(text="❌ Закрыть игру", callback_data="cmd_kill_game")],
+        [InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data="menu_main")]
     ])
 
 def get_back_keyboard():
@@ -63,7 +71,7 @@ def get_back_keyboard():
         [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_main")]
     ])
 
-async def update_dashboard_ui():
+async def update_dashboard_ui(menu_type="main", custom_text=None):
     if not TARGET_CHAT_ID: return
     row = await execute_query("SELECT last_ping, status_text, menu_id FROM commands WHERE id = 1")
     if not row: return
@@ -77,16 +85,19 @@ async def update_dashboard_ui():
     status_icon = "🟢 <b>Онлайн</b>" if is_online else "🔴 <b>Оффлайн</b>"
     text_status = status_text if status_text else "Ожидание команд..."
     
-    text = (
+    base_text = (
         f"🎛 <b>Cobalt Rent | Панель управления</b>\n"
         f"➖➖➖➖➖➖➖➖➖➖\n"
-        f"🖥 <b>Связь с агентом ПК:</b> {status_icon}\n"
-        f"🔄 <b>Журнал событий:</b>\n └ <i>{text_status}</i>\n"
+        f"🖥 <b>Связь с агентом:</b> {status_icon}\n"
+        f"🔄 <b>Журнал:</b> <i>{text_status}</i>\n"
         f"➖➖➖➖➖➖➖➖➖➖\n"
-        f"Выберите действие:"
     )
+    
+    text = custom_text if custom_text else base_text + "Выберите действие:"
+    keyboard = get_manual_keyboard() if menu_type == "manual" else get_main_keyboard()
+    
     try:
-        await bot.edit_message_text(chat_id=TARGET_CHAT_ID, message_id=menu_id, text=text, reply_markup=get_main_keyboard(), parse_mode="HTML")
+        await bot.edit_message_text(chat_id=TARGET_CHAT_ID, message_id=menu_id, text=text, reply_markup=keyboard, parse_mode="HTML")
     except Exception: pass
 
 # ==========================================
@@ -97,15 +108,34 @@ async def check_expired_rents():
         try:
             query = "SELECT id, car_name FROM rent_stats WHERE rent_end <= NOW() AND (notified IS NULL OR notified = FALSE)"
             expired = await execute_query(query)
+            
             if expired:
                 for row in expired:
                     rent_id, car_name = row[0], row[1]
+                    
                     if TARGET_CHAT_ID:
+                        # 1. Создаем клавиатуру (без лишнего try)
+                        auto_kb = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="🤖 Запустить полный цикл", callback_data="cmd_full_auto")]
+                        ])
+                        
+                        # 2. Пробуем отправить сообщение
                         try:
-                            await bot.send_message(chat_id=TARGET_CHAT_ID, text=f"🟢 <b>Автомобиль вернулся!</b>\n\n🚗 <b>{car_name}</b> вышел из аренды.\nПора снова включать ПК и выставлять!", parse_mode="HTML")
-                        except Exception: pass
+                            await bot.send_message(
+                                chat_id=TARGET_CHAT_ID, 
+                                text=f"🟢 <b>Автомобиль вернулся!</b>\n\n🚗 <b>{car_name}</b> вышел из аренды.\nПора выставлять!", 
+                                parse_mode="HTML",
+                                reply_markup=auto_kb
+                            )
+                        except Exception: 
+                            pass
+                            
+                    # 3. Отмечаем в БД, что уведомили (вне зависимости от успеха отправки в ТГ)
                     await execute_query("UPDATE rent_stats SET notified = TRUE WHERE id = $1", rent_id)
-        except Exception: pass
+                    
+        except Exception: 
+            pass
+            
         await asyncio.sleep(60)
 
 # ==========================================
@@ -213,6 +243,14 @@ async def process_callbacks(callback: CallbackQuery, state: FSMContext):
     
     if data.startswith("cmd_"):
         command = data.replace("cmd_", "")
+        
+        if command == "full_auto":
+            await trigger_ifttt("pc_on")
+            await execute_query("UPDATE commands SET cmd = 'full_auto', status_text = '⚡ Запуск полного цикла. Включаю ПК...' WHERE id = 1")
+            await callback.answer("Полный авто-цикл запущен!")
+        elif command == "stop_bot":
+            await execute_query("UPDATE commands SET cmd = 'stop_bot', status_text = '🔴 Экстренная остановка!' WHERE id = 1")
+            await callback.answer("Останавливаю агента!", show_alert=True)
         if command == "turn_on":
             await trigger_ifttt("pc_on")
             await execute_query("UPDATE commands SET status_text = '⚡ Отправлен IFTTT сигнал на включение' WHERE id=1")
