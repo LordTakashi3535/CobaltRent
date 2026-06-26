@@ -262,6 +262,10 @@ async def process_callbacks(callback: CallbackQuery, state: FSMContext):
             await execute_query("UPDATE commands SET cmd = $1, status_text = $2 WHERE id = 1", command, f"Отправлена команда: {command}")
             await callback.answer("Команда в очереди!")
         await update_dashboard_ui()
+
+    elif data == "menu_manual":
+        await update_dashboard_ui(menu_type="manual")
+        await callback.answer()
         
     elif data == "menu_timers":
         active_rents = await execute_query("SELECT car_name, rent_end FROM rent_stats WHERE rent_end > NOW() ORDER BY rent_end ASC")
