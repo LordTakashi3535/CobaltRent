@@ -404,7 +404,17 @@ async def get_task():
 
 @app.get("/agent_started")
 async def api_agent_started():
-    await execute_query("UPDATE commands SET cmd = 'none', status_text = '✅ Агент успешно запущен и готов к работе!' WHERE id = 1")
+    # Если текущая команда 'full_auto', оставляем её, иначе сбрасываем в 'none'
+    query = """
+        UPDATE commands 
+        SET status_text = '✅ Агент на ПК запущен!',
+            cmd = CASE 
+                    WHEN cmd = 'full_auto' THEN 'full_auto' 
+                    ELSE 'none' 
+                  END
+        WHERE id = 1
+    """
+    await execute_query(query)
     await update_dashboard_ui()
     return {"status": "ok"}
 
