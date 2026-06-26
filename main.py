@@ -402,6 +402,16 @@ async def get_task():
     if cmd != 'none': await execute_query("UPDATE commands SET cmd = 'none' WHERE id = 1")
     return {"command": cmd}
 
+@app.get("/trigger_shutdown")
+async def api_trigger_shutdown():
+    await asyncio.sleep(60) 
+    # Отправляем IFTTT сигнал
+    await trigger_ifttt("pc_off")
+    # Обновляем статус
+    await execute_query("UPDATE commands SET status_text = '💤 ПК обесточен' WHERE id = 1")
+    await update_dashboard_ui()
+    return {"status": "ok"}
+
 @app.get("/agent_started")
 async def api_agent_started():
     # Если текущая команда 'full_auto', оставляем её, иначе сбрасываем в 'none'
