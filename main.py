@@ -38,6 +38,9 @@ class FleetStates(StatesGroup):
     waiting_for_new_car_price = State()
     waiting_for_edit_price = State()
 
+class AuthStates(StatesGroup):
+    waiting_for_key = State()
+
 async def execute_query(query, *args):
     conn = await asyncpg.connect(DATABASE_URL)
     result = await conn.fetch(query, *args)
