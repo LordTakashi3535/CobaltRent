@@ -503,39 +503,49 @@ async def process_callbacks(callback: CallbackQuery, state: FSMContext):
         await update_dashboard_ui(user_id)
 
 # --- ОБРАБОТЧИКИ ВВОДА ТЕКСТА (АВТОПАРК) ---
+@dp.message(FleetStates.waiting_for_new_car_name)
+async def process_new_car_name(message: Message, state: FSMContext):
+    # Принудительно сохраняем название в state
+    await state.update_data(car_name=message.text.strip())
+    # И сразу переводим дальше
+    await message.answer("💵 <b>Пришли цену аренды за час (только цифры):</b>", parse_mode="HTML")
+    await state.set_state(FleetStates.waiting_for_new_car_price)
+
 @dp.message(FleetStates.waiting_for_new_car_price)
 async def process_new_car_price(message: Message, state: FSMContext):
-    # 1. Сначала проверим, что ввели именно число
-    if not message.text.strip().isdigit():
+    price_text = message.text.strip()
+    if not price_text.isdigit():
         await message.answer("⚠️ Ошибка: Введите цену только цифрами!")
         return
 
     try:
-        price = int(message.text.strip())
+        # Достаем название, которое сохранили шаг назад
         data = await state.get_data()
-        user_id = message.from_user.id
         car_name = data.get('car_name')
-
+        
+        # Если название потерялось, сообщаем
         if not car_name:
-            await message.answer("❌ Ошибка: Не удалось найти название машины. Начните сначала: /menu")
+            await message.answer("❌ Название машины потерялось. Начни заново через /menu")
             await state.clear()
             return
 
-        # 2. Выполняем запрос
+        user_id = message.from_user.id
+        
+        # Записываем в базу
         await execute_query("""
             INSERT INTO fleet (owner_id, car_name, price) 
             VALUES ($1, $2, $3) 
             ON CONFLICT (owner_id, car_name) 
             DO UPDATE SET price = EXCLUDED.price
-        """, user_id, car_name, price)
+        """, user_id, car_name, int(price_text))
         
-        await message.answer(f"✅ Машина <b>{car_name}</b> сохранена (цена: {price}$/ч)!", parse_mode="HTML")
+        await message.answer(f"✅ Успешно! {car_name} теперь стоит {price_text}$/ч.", parse_mode="HTML")
         await state.clear()
-        await update_dashboard_ui(user_id) # Обновляем меню
-
+        # Обновляем меню, чтобы клиент сразу увидел результат
+        await update_dashboard_ui(user_id)
+        
     except Exception as e:
-        # Теперь бот пришлет ошибку прямо в чат, если что-то пойдет не так
-        await message.answer(f"❌ Критическая ошибка: {str(e)}")
+        await message.answer(f"❌ Ошибка сохранения: {e}")
         await state.clear()
 
 # ==========================================
