@@ -413,22 +413,57 @@ async def process_callbacks(callback: CallbackQuery, state: FSMContext):
         
     elif data == "menu_stats":
         try:
+            # 1. Общие данные
+            res = await execute_query("""
+                SELECT 
+                    COALESCE(SUM(price - 1250 + refund), 0),
+                    COUNT(*) 
+                FROM rent_stats WHERE owner_id = $1
+            """, user_id)
+            
+            # 2. Сегодня
             res_today = await execute_query("SELECT COALESCE(SUM(price - 1250 + refund), 0), COUNT(*) FROM rent_stats WHERE created_at >= CURRENT_DATE AND owner_id = $1", user_id)
-            res_cars_today = await execute_query("SELECT car_name, COALESCE(SUM(price - 1250 + refund), 0) as total, COUNT(*) FROM rent_stats WHERE created_at >= CURRENT_DATE AND owner_id = $1 GROUP BY car_name ORDER BY total DESC", user_id)
             
-            text = (f"📊 <b>Статистика Аренды</b>\n\n🔹 <b>Сегодня:</b> {res_today[0][0]}$ ({res_today[0][1]} сдач)\n\n🚗 <b>Доход авто за СЕГОДНЯ:</b>\n")
-            if res_cars_today:
-                for car_name, total, count in res_cars_today: text += f"▫️ {car_name}: {total}$ (x{count})\n"
-            else: text += "▫️ Пока нет сдач\n"
+            # 3. Вчера (используем INTERVAL '1 day')
+            res_yesterday = await execute_query("""
+                SELECT COALESCE(SUM(price - 1250 + refund), 0), COUNT(*) 
+                FROM rent_stats 
+                WHERE created_at >= CURRENT_DATE - INTERVAL '1 day' 
+                  AND created_at < CURRENT_DATE 
+                  AND owner_id = $1
+            """, user_id)
             
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🗑 Очистить базу", callback_data="cmd_clear_stats")], [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="menu_main")]])
+            # 4. За 7 дней
+            res_7 = await execute_query("SELECT COALESCE(SUM(price - 1250 + refund), 0), COUNT(*) FROM rent_stats WHERE created_at >= CURRENT_DATE - INTERVAL '7 days' AND owner_id = $1", user_id)
+            
+            # 5. Топ машин
+            res_cars = await execute_query("SELECT car_name, COALESCE(SUM(price - 1250 + refund), 0) as total FROM rent_stats WHERE owner_id = $1 GROUP BY car_name ORDER BY total DESC LIMIT 5", user_id)
+
+            total_sum, total_count = res[0]
+            
+            text = (
+                f"📊 <b>Детальная статистика</b>\n\n"
+                f"💰 <b>Всего заработано:</b> {total_sum}$\n"
+                f"🚗 <b>Всего сдач:</b> {total_count}\n\n"
+                f"📅 <b>Сегодня:</b> {res_today[0][0]}$ ({res_today[0][1]} шт.)\n"
+                f"⬅️ <b>Вчера:</b> {res_yesterday[0][0]}$ ({res_yesterday[0][1]} шт.)\n"
+                f"🗓 <b>За 7 дней:</b> {res_7[0][0]}$ ({res_7[0][1]} шт.)\n\n"
+                f"🏆 <b>Топ-5 машин:</b>\n"
+            )
+            
+            if res_cars:
+                for car_name, total in res_cars:
+                    text += f"▫️ {car_name}: {total}$\n"
+            else:
+                text += "▫️ Пока данных нет\n"
+            
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🗑 Очистить всю статистику", callback_data="cmd_clear_stats")],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="menu_main")]
+            ])
             await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
-        except Exception as e: pass
-        
-    elif data == "cmd_clear_stats":
-        await execute_query("DELETE FROM rent_stats WHERE owner_id = $1", user_id)
-        await callback.answer("База стерта!", show_alert=True)
-        await update_dashboard_ui(user_id)
+        except Exception as e: 
+            await callback.answer(f"Ошибка: {e}")
         
     # --- БЛОК АВТОПАРКА ---
     elif data == "menu_fleet":
