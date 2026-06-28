@@ -532,11 +532,10 @@ async def process_new_car_price(message: Message, state: FSMContext):
         user_id = message.from_user.id
         
         # Записываем в базу
+        # Убираем ON CONFLICT, просто вставляем новую строку
         await execute_query("""
             INSERT INTO fleet (owner_id, car_name, price) 
-            VALUES ($1, $2, $3) 
-            ON CONFLICT (owner_id, car_name) 
-            DO UPDATE SET price = EXCLUDED.price
+            VALUES ($1, $2, $3)
         """, user_id, car_name, int(price_text))
         
         await message.answer(f"✅ Успешно! {car_name} теперь стоит {price_text}$/ч.", parse_mode="HTML")
