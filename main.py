@@ -226,6 +226,21 @@ async def lifespan(app: FastAPI):
             notified BOOLEAN DEFAULT FALSE
         )
     """)
+
+    # === ОБНОВЛЕНИЕ СТАРЫХ ТАБЛИЦ ДЛЯ ПРОДАЖ ===
+    try:
+        # 1. Добавляем колонку owner_id в старые таблицы
+        await execute_query("ALTER TABLE fleet ADD COLUMN owner_id BIGINT")
+        await execute_query("ALTER TABLE rent_stats ADD COLUMN owner_id BIGINT")
+        
+        # 2. Привязываем твой старый автопарк и статистику к тебе (Админу), чтобы ничего не пропало
+        admin_id = int(TARGET_CHAT_ID)
+        await execute_query("UPDATE fleet SET owner_id = $1 WHERE owner_id IS NULL", admin_id)
+        await execute_query("UPDATE rent_stats SET owner_id = $1 WHERE owner_id IS NULL", admin_id)
+        print("✅ База данных успешно обновлена под Multi-Account!")
+    except Exception as e:
+        # Если колонки уже есть, база выдаст ошибку, мы ее просто игнорируем
+        pass
     
     print("🤖 Бот запускается...")
     bot_task = asyncio.create_task(dp.start_polling(bot))
