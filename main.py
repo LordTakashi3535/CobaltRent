@@ -498,15 +498,15 @@ async def get_task(user_id: int):
     # 2. Получаем команду
     result = await execute_query("SELECT cmd FROM clients WHERE user_id = $1", user_id)
     
-    # Если клиента еще нет в базе — создаем его
     if not result: 
         await execute_query("INSERT INTO clients (user_id, cmd) VALUES ($1, 'none')", user_id)
         return {"command": "none"}
         
     cmd = result[0][0]
     
-    # 3. Сбрасываем команду (НО оставляем full_auto, чтобы агент точно успел ее прочитать)
-    if cmd != 'none' and cmd != 'full_auto': 
+    # 3. ИСПРАВЛЕНИЕ: Теперь мы точно сбрасываем любую команду (включая full_auto) 
+    # СРАЗУ ПОСЛЕ того, как агент ее прочитал!
+    if cmd != 'none': 
         await execute_query("UPDATE clients SET cmd = 'none' WHERE user_id = $1", user_id)
         
     return {"command": cmd}
