@@ -40,6 +40,7 @@ class FleetStates(StatesGroup):
 
 class AuthStates(StatesGroup):
     waiting_for_key = State()
+    waiting_for_name = State()
 
 async def execute_query(query, *args):
     conn = await asyncpg.connect(DATABASE_URL)
@@ -183,7 +184,7 @@ async def lifespan(app: FastAPI):
         )
     """)
     
-    # 2. Таблица клиентов (у каждого свой статус ПК, пинг и команды)
+# 2. Таблица клиентов (у каждого свой статус ПК, пинг и команды)
     await execute_query("""
         CREATE TABLE IF NOT EXISTS clients (
             user_id BIGINT PRIMARY KEY,
@@ -193,6 +194,12 @@ async def lifespan(app: FastAPI):
             status_text TEXT DEFAULT 'Ожидание'
         )
     """)
+
+    # Безопасно добавляем колонку для имени (на случай, если таблица уже существует, но без этой колонки)
+    try:
+        await execute_query("ALTER TABLE clients ADD COLUMN client_name TEXT DEFAULT 'Пользователь'")
+    except Exception:
+        pass
     
     # 3. Автопарк (привязан к владельцу)
     await execute_query("""
@@ -300,18 +307,34 @@ async def process_key(message: Message, state: FSMContext):
     key = message.text.strip()
     row = await execute_query("SELECT is_used FROM access_keys WHERE key_code = $1", key)
     
-    if row and not row[0][0]: # Ключ найден и еще не активирован
-        user_id = message.from_user.id
-        
-        # Привязываем ключ к клиенту
-        await execute_query("UPDATE access_keys SET is_used = TRUE, used_by = $1 WHERE key_code = $2", user_id, key)
-        # Добавляем в систему управления
-        await execute_query("INSERT INTO clients (user_id, cmd) VALUES ($1, 'none') ON CONFLICT DO NOTHING", user_id)
-        
-        await message.answer("✅ <b>Ключ успешно активирован!</b>\nНапишите /menu чтобы открыть панель управления.", parse_mode="HTML")
-        await state.clear()
+    if row and not row[0][0]: # Ключ найден и не активирован
+        # Сохраняем валидный ключ во временную память FSM
+        await state.update_data(valid_key=key)
+        await message.answer("✅ <b>Ключ принят!</b>\nКак я могу к вам обращаться? (Введите ваше имя/никнейм):", parse_mode="HTML")
+        # Переводим бота в режим ожидания имени
+        await state.set_state(AuthStates.waiting_for_name)
     else:
         await message.answer("❌ Неверный или уже активированный ключ. Попробуйте еще раз:")
+
+@dp.message(AuthStates.waiting_for_name)
+async def process_name(message: Message, state: FSMContext):
+    client_name = message.text.strip()
+    data = await state.get_data()
+    key = data['valid_key']
+    user_id = message.from_user.id
+    
+    # 1. Привязываем ключ к Telegram ID
+    await execute_query("UPDATE access_keys SET is_used = TRUE, used_by = $1 WHERE key_code = $2", user_id, key)
+    
+    # 2. Сохраняем ID клиента и его ИМЯ в таблицу клиентов
+    await execute_query("""
+        INSERT INTO clients (user_id, client_name, cmd) 
+        VALUES ($1, $2, 'none') 
+        ON CONFLICT (user_id) DO UPDATE SET client_name = EXCLUDED.client_name
+    """, user_id, client_name)
+    
+    await message.answer(f"🎉 <b>Добро пожаловать, {client_name}!</b>\nНапишите /menu чтобы открыть панель управления.", parse_mode="HTML")
+    await state.clear()
 
 @dp.callback_query()
 async def process_callbacks(callback: CallbackQuery, state: FSMContext):
@@ -490,15 +513,19 @@ async def get_task(user_id: int):
 
 @app.get("/auth_agent")
 async def api_auth_agent(key: str):
-    # Ищем, кому принадлежит этот ключ и активирован ли он
-    result = await execute_query("SELECT used_by FROM access_keys WHERE key_code = $1 AND is_used = TRUE", key)
+    # Вытягиваем ID клиента из ключа и его имя из таблицы clients
+    result = await execute_query("""
+        SELECT a.used_by, c.client_name 
+        FROM access_keys a
+        JOIN clients c ON a.used_by = c.user_id
+        WHERE a.key_code = $1 AND a.is_used = TRUE
+    """, key)
     
-    if not result or not result[0][0]:
-        # Ключ не найден или еще не активирован в Telegram-боте
+    if not result:
         raise HTTPException(status_code=401, detail="Invalid or unused key")
         
-    # Возвращаем Telegram ID владельца ключа
-    return {"user_id": result[0][0]}
+    # Возвращаем и ID, и Имя
+    return {"user_id": result[0][0], "client_name": result[0][1]}
 
 @app.get("/trigger_shutdown")
 async def api_trigger_shutdown(user_id: int):
