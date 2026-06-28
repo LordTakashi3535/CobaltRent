@@ -170,27 +170,54 @@ async def handle_receipt(event):
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await execute_query("CREATE TABLE IF NOT EXISTS commands (id INTEGER PRIMARY KEY, cmd TEXT, last_ping TIMESTAMP, menu_id BIGINT, status_text TEXT DEFAULT 'Ожидание')")
+    # 1. Таблица ключей доступа
+    await execute_query("""
+        CREATE TABLE IF NOT EXISTS access_keys (
+            key_code TEXT PRIMARY KEY,
+            is_used BOOLEAN DEFAULT FALSE,
+            used_by BIGINT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
     
-    # НОВАЯ ТАБЛИЦА: Автопарк
+    # 2. Таблица клиентов (у каждого свой статус ПК, пинг и команды)
+    await execute_query("""
+        CREATE TABLE IF NOT EXISTS clients (
+            user_id BIGINT PRIMARY KEY,
+            cmd TEXT DEFAULT 'none',
+            last_ping TIMESTAMP,
+            menu_id BIGINT,
+            status_text TEXT DEFAULT 'Ожидание'
+        )
+    """)
+    
+    # 3. Автопарк (привязан к владельцу)
     await execute_query("""
         CREATE TABLE IF NOT EXISTS fleet (
             id SERIAL PRIMARY KEY,
-            car_name TEXT UNIQUE,
-            price INTEGER
+            owner_id BIGINT,
+            car_name TEXT,
+            price INTEGER,
+            UNIQUE(owner_id, car_name)
         )
     """)
     
+    # 4. Статистика аренды (привязана к владельцу)
     await execute_query("""
         CREATE TABLE IF NOT EXISTS rent_stats (
-            id SERIAL PRIMARY KEY, car_name TEXT, price INTEGER, duration INTEGER,
-            refund INTEGER, rent_end TIMESTAMP, created_at TIMESTAMP DEFAULT NOW(), notified BOOLEAN DEFAULT FALSE
+            id SERIAL PRIMARY KEY,
+            owner_id BIGINT,
+            car_name TEXT,
+            price INTEGER,
+            duration INTEGER,
+            refund INTEGER,
+            rent_end TIMESTAMP,
+            created_at TIMESTAMP DEFAULT NOW(),
+            notified BOOLEAN DEFAULT FALSE
         )
     """)
     
-    count = await execute_query("SELECT COUNT(*) FROM commands")
-    if count[0][0] == 0: await execute_query("INSERT INTO commands (id, cmd) VALUES (1, 'none')")
-    
+    print("🤖 Бот запускается...")
     bot_task = asyncio.create_task(dp.start_polling(bot))
     await userbot.connect()
     userbot_task = asyncio.create_task(userbot.run_until_disconnected())
@@ -393,51 +420,84 @@ async def process_edit_car_price(message: Message, state: FSMContext):
 # ==========================================
 # --- API ДЛЯ АГЕНТА НА ПК ---
 # ==========================================
+# ==========================================
+# --- API ДЛЯ АГЕНТА НА ПК (MULTI-ACCOUNT) ---
+# ==========================================
+
 @app.get("/get_task")
-async def get_task():
-    await execute_query("UPDATE commands SET last_ping = NOW() WHERE id = 1")
-    result = await execute_query("SELECT cmd FROM commands WHERE id = 1")
-    if not result: raise HTTPException(status_code=500)
+async def get_task(user_id: int):
+    # 1. Обновляем пинг конкретного клиента
+    await execute_query("UPDATE clients SET last_ping = NOW() WHERE user_id = $1", user_id)
+    
+    # 2. Получаем команду
+    result = await execute_query("SELECT cmd FROM clients WHERE user_id = $1", user_id)
+    
+    # Если клиента еще нет в базе — создаем его
+    if not result: 
+        await execute_query("INSERT INTO clients (user_id, cmd) VALUES ($1, 'none')", user_id)
+        return {"command": "none"}
+        
     cmd = result[0][0]
-    if cmd != 'none': await execute_query("UPDATE commands SET cmd = 'none' WHERE id = 1")
+    
+    # 3. Сбрасываем команду (НО оставляем full_auto, чтобы агент точно успел ее прочитать)
+    if cmd != 'none' and cmd != 'full_auto': 
+        await execute_query("UPDATE clients SET cmd = 'none' WHERE user_id = $1", user_id)
+        
     return {"command": cmd}
 
+@app.get("/auth_agent")
+async def api_auth_agent(key: str):
+    # Ищем, кому принадлежит этот ключ и активирован ли он
+    result = await execute_query("SELECT used_by FROM access_keys WHERE key_code = $1 AND is_used = TRUE", key)
+    
+    if not result or not result[0][0]:
+        # Ключ не найден или еще не активирован в Telegram-боте
+        raise HTTPException(status_code=401, detail="Invalid or unused key")
+        
+    # Возвращаем Telegram ID владельца ключа
+    return {"user_id": result[0][0]}
+
 @app.get("/trigger_shutdown")
-async def api_trigger_shutdown():
-    await asyncio.sleep(60) 
-    # Отправляем IFTTT сигнал
-    await trigger_ifttt("pc_off")
-    # Обновляем статус
-    await execute_query("UPDATE commands SET status_text = '💤 ПК обесточен' WHERE id = 1")
-    await update_dashboard_ui()
+async def api_trigger_shutdown(user_id: int):
+    # ЗАПУСКАЕМ ТАЙМЕР В ФОНЕ (чтобы Railway сразу отдал ответ "ok" и не завис)
+    asyncio.create_task(delayed_power_off(user_id))
     return {"status": "ok"}
 
+async def delayed_power_off(user_id: int):
+    """Фоновая задача: ждет 60 сек и отключает розетку"""
+    await asyncio.sleep(60) 
+    await trigger_ifttt("pc_off")
+    await execute_query("UPDATE clients SET status_text = '💤 ПК обесточен' WHERE user_id = $1", user_id)
+    await update_dashboard_ui() # Обновляем меню в ТГ
+
 @app.get("/agent_started")
-async def api_agent_started():
+async def api_agent_started(user_id: int):
     # Если текущая команда 'full_auto', оставляем её, иначе сбрасываем в 'none'
     query = """
-        UPDATE commands 
+        UPDATE clients 
         SET status_text = '✅ Агент на ПК запущен!',
             cmd = CASE 
                     WHEN cmd = 'full_auto' THEN 'full_auto' 
                     ELSE 'none' 
                   END
-        WHERE id = 1
+        WHERE user_id = $1
     """
-    await execute_query(query)
+    await execute_query(query, user_id)
     await update_dashboard_ui()
     return {"status": "ok"}
 
 @app.get("/update_status")
-async def api_update_status(text: str):
-    await execute_query("UPDATE commands SET status_text = $1 WHERE id = 1", text)
+async def api_update_status(user_id: int, text: str):
+    # Записываем статус в профиль конкретного клиента
+    await execute_query("UPDATE clients SET status_text = $2 WHERE user_id = $1", user_id, text)
     await update_dashboard_ui()
     return {"status": "ok"}
 
 # НОВЫЙ ЭНДПОИНТ: Отдаем список машин для ПК
 @app.get("/get_fleet")
-async def api_get_fleet():
-    cars = await execute_query("SELECT car_name, price FROM fleet")
+async def api_get_fleet(user_id: int):
+    # Ищем машины, которые принадлежат только этому клиенту
+    cars = await execute_query("SELECT car_name, price FROM fleet WHERE owner_id = $1", user_id)
     return {"fleet": [{"name": c[0], "price": c[1]} for c in cars]}
 
 if __name__ == "__main__":
