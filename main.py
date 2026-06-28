@@ -503,35 +503,40 @@ async def process_callbacks(callback: CallbackQuery, state: FSMContext):
         await update_dashboard_ui(user_id)
 
 # --- ОБРАБОТЧИКИ ВВОДА ТЕКСТА (АВТОПАРК) ---
-@dp.message(FleetStates.waiting_for_new_car_name)
-async def process_new_car_name(message: Message, state: FSMContext):
-    await state.update_data(car_name=message.text.strip())
-    await message.answer("💵 <b>Напиши цену аренды за час (только цифры):</b>", parse_mode="HTML")
-    await state.set_state(FleetStates.waiting_for_new_car_price)
-
 @dp.message(FleetStates.waiting_for_new_car_price)
 async def process_new_car_price(message: Message, state: FSMContext):
-    try:
-        price = int(message.text.strip())
-        data = await state.get_data()
-        user_id = message.from_user.id
-        await execute_query("INSERT INTO fleet (owner_id, car_name, price) VALUES ($1, $2, $3) ON CONFLICT (owner_id, car_name) DO UPDATE SET price = EXCLUDED.price", user_id, data['car_name'], price)
-        await message.answer(f"✅ Машина <b>{data['car_name']}</b> добавлена с ценой {price}$/ч!", parse_mode="HTML")
-        await state.clear()
-        await update_dashboard_ui(user_id)
-    except ValueError: pass
+    # 1. Сначала проверим, что ввели именно число
+    if not message.text.strip().isdigit():
+        await message.answer("⚠️ Ошибка: Введите цену только цифрами!")
+        return
 
-@dp.message(FleetStates.waiting_for_edit_price)
-async def process_edit_car_price(message: Message, state: FSMContext):
     try:
         price = int(message.text.strip())
         data = await state.get_data()
         user_id = message.from_user.id
-        await execute_query("UPDATE fleet SET price = $1 WHERE id = $2 AND owner_id = $3", price, data['edit_car_id'], user_id)
-        await message.answer(f"✅ Цена успешно обновлена на {price}$/ч!", parse_mode="HTML")
+        car_name = data.get('car_name')
+
+        if not car_name:
+            await message.answer("❌ Ошибка: Не удалось найти название машины. Начните сначала: /menu")
+            await state.clear()
+            return
+
+        # 2. Выполняем запрос
+        await execute_query("""
+            INSERT INTO fleet (owner_id, car_name, price) 
+            VALUES ($1, $2, $3) 
+            ON CONFLICT (owner_id, car_name) 
+            DO UPDATE SET price = EXCLUDED.price
+        """, user_id, car_name, price)
+        
+        await message.answer(f"✅ Машина <b>{car_name}</b> сохранена (цена: {price}$/ч)!", parse_mode="HTML")
         await state.clear()
-        await update_dashboard_ui(user_id)
-    except ValueError: pass
+        await update_dashboard_ui(user_id) # Обновляем меню
+
+    except Exception as e:
+        # Теперь бот пришлет ошибку прямо в чат, если что-то пойдет не так
+        await message.answer(f"❌ Критическая ошибка: {str(e)}")
+        await state.clear()
 
 # ==========================================
 # --- API ДЛЯ АГЕНТА НА ПК ---
