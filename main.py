@@ -152,22 +152,47 @@ async def handle_receipt(event):
     text = event.message.text
     if text and "Транспорт сдан в аренду!" in text:
         try:
+            # Парсинг данных
             car_match = re.search(r"Транспорт:\s*(.+)", text)
             car_name = car_match.group(1).strip() if car_match else "Неизвестно"
+            
             price_match = re.search(r"Цена:\s*\$([\d\s]+)", text)
             price = int(re.sub(r"\s", "", price_match.group(1))) if price_match else 0
+            
             dur_match = re.search(r"Длительность:\s*(\d+)", text)
             duration = int(dur_match.group(1)) if dur_match else 0
+            
             ref_match = re.search(r"Возврат денег за объявление:\s*\$([\d\s]+)", text)
             refund = int(re.sub(r"\s", "", ref_match.group(1))) if ref_match else 0
 
+            # Расчеты
             rent_end = datetime.now() + timedelta(hours=duration)
             net_profit = price - 1250 + refund
-
-            await execute_query("INSERT INTO rent_stats (car_name, price, duration, refund, rent_end, notified) VALUES ($1, $2, $3, $4, $5, FALSE)", car_name, price, duration, refund, rent_end)
+            
+            # ВАЖНО: Добавляем owner_id. 
+            # Если это агент пользователя, берем его ID. 
+            # Для универсальности лучше брать ID из конфига или БД.
+            owner_id = 6490746307 # Замени на переменную, если есть в конфиге
+            
+            # Запрос в БД с учетом owner_id
+            await execute_query("""
+                INSERT INTO rent_stats 
+                (owner_id, car_name, price, duration, refund, rent_end, notified) 
+                VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+            """, owner_id, car_name, price, duration, refund, rent_end)
+            
+            # Уведомление
             if TARGET_CHAT_ID:
-                await bot.send_message(chat_id=TARGET_CHAT_ID, text=(f"🔔 <b>Новая сдача в аренду!</b>\n\n🚗 Авто: <b>{car_name}</b>\n💰 <b>Чистая прибыль: {net_profit}$</b>\n⏳ Освободится: {rent_end.strftime('%d.%m %H:%M')}"), parse_mode="HTML")
-        except Exception: pass
+                await bot.send_message(
+                    chat_id=TARGET_CHAT_ID, 
+                    text=(f"🔔 <b>Новая сдача!</b>\n\n"
+                          f"🚗 Авто: <b>{car_name}</b>\n"
+                          f"💰 Чистая прибыль: <b>{net_profit}$</b>\n"
+                          f"⏳ Освободится: {rent_end.strftime('%d.%m %H:%M')}"), 
+                    parse_mode="HTML"
+                )
+        except Exception as e:
+            print(f"Ошибка при обработке аренды: {e}") # Вывод ошибки в консоль поможет понять, что сломалось
 
 # ==========================================
 # --- ЖИЗНЕННЫЙ ЦИКЛ СЕРВЕРА ---
