@@ -513,7 +513,12 @@ async def get_task(user_id: int):
 
 @app.get("/auth_agent")
 async def api_auth_agent(key: str):
-    # Вытягиваем ID клиента из ключа и его имя из таблицы clients
+    # 👇 ДОБАВЛЯЕМ ХАРДКОД ПРОВЕРКУ ДЛЯ ТЕБЯ (АДМИНА) 👇
+    if key == "ADMIN3565": # Можешь заменить "ADMIN" на свой секретный пароль
+        # Автоматически возвращаем твой ID и имя "Администратор"
+        return {"user_id": int(TARGET_CHAT_ID), "client_name": "Администратор"}
+        
+    # Дальше идет старый код для обычных покупателей:
     result = await execute_query("""
         SELECT a.used_by, c.client_name 
         FROM access_keys a
@@ -522,9 +527,8 @@ async def api_auth_agent(key: str):
     """, key)
     
     if not result:
-        raise HTTPException(status_code=401, detail="Invalid or unused key")
+        raise HTTPException(status_code=404, detail="Invalid or unused key")
         
-    # Возвращаем и ID, и Имя
     return {"user_id": result[0][0], "client_name": result[0][1]}
 
 @app.get("/trigger_shutdown")
